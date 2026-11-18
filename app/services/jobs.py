@@ -44,26 +44,25 @@ def create_job(employer_id: int, title: str, description: str, skills_text: str)
 
 
 def update_job(actor_id: int, job_id: int, title: str, description: str, skills_text: str) -> dict:
-    job = get_owned_job(actor_id, job_id)
     title = (title or "").strip()
     description = (description or "").strip()
-    if not title:
-        raise ValidationError("Job title is required")
-    if not description:
-        raise ValidationError("Job description is required")
     skills = parse_skills_text(skills_text or "")
-    db = get_db()
-    with transaction():
+    with transaction(immediate=True) as db:
+        _require_job_owner(db, actor_id, job_id)
+        if not title:
+            raise ValidationError("Job title is required")
+        if not description:
+            raise ValidationError("Job description is required")
         db.execute(
             "UPDATE jobs SET title = ?, description = ? WHERE id = ?",
-            (title, description, job["id"]),
+            (title, description, job_id),
         )
-        db.execute("DELETE FROM job_skills WHERE job_id = ?", (job["id"],))
+        db.execute("DELETE FROM job_skills WHERE job_id = ?", (job_id,))
         db.executemany(
             "INSERT INTO job_skills (job_id, skill) VALUES (?, ?)",
-            [(job["id"], skill) for skill in skills],
+            [(job_id, skill) for skill in skills],
         )
-    return get_job(job["id"])
+        return get_job(job_id)
 
 
 def delete_job(actor_id: int, job_id: int) -> None:
@@ -75,10 +74,9 @@ def delete_job(actor_id: int, job_id: int) -> None:
     409 Conflict and leaves the job and its dependents unchanged. The
     ``ON DELETE RESTRICT`` foreign keys are the database-level backstop.
     """
-    get_owned_job(actor_id, job_id)
-    db = get_db()
     try:
-        with transaction(immediate=True):
+        with transaction(immediate=True) as db:
+            _require_job_owner(db, actor_id, job_id)
             applications = db.execute(
                 "SELECT COUNT(*) AS n FROM applications WHERE job_id = ?", (job_id,)
             ).fetchone()["n"]
@@ -112,19 +110,17 @@ def get_job(job_id: int) -> dict:
     }
 
 
-def get_owned_job(actor_id: int, job_id: int) -> dict:
-    """Load a job for management operations (edit/delete/applicants/slots).
-
-    Enforces the FP-EMP-2 / FP-AUTH-3 boundary *before* returning any content:
-    a missing job raises 404 and a foreign posting raises 403 — including for
-    reads of the edit form, not just writes.
-    """
-    db = get_db()
+def _require_job_owner(db, actor_id: int, job_id: int) -> None:
     job = _load_job(db, job_id)
     if job is None:
         raise NotFoundError("Job not found")
     if job["employer_id"] != actor_id:
         raise AuthorizationError("You do not own this job posting")
+
+
+def get_owned_job(actor_id: int, job_id: int) -> dict:
+    """Load an owned job for a management page (404 if missing, 403 if foreign)."""
+    _require_job_owner(get_db(), actor_id, job_id)
     return get_job(job_id)
 
 

@@ -46,6 +46,7 @@ Schema DDL: `app/db.py` (`SCHEMA`). All timestamps are UTC ISO-8601
 
 | Table | Columns (key parts) | Constraints / relationships |
 |---|---|---|
+| `session_generation` | `value` | One random value shared by all server processes using this database. A reset creates a new value. |
 | `users` | `id`, `email`, `password_hash`, `role`, `created_at` | `email` UNIQUE (stored lowercased → case-insensitive identity); `role IN ('Candidate','Employer')` |
 | `candidate_profiles` | `user_id`, `display_name`, `resume_text` | 1:1 `users.id` (candidate); `resume_text` default `''` |
 | `candidate_skills` | `user_id`, `skill` | PK `(user_id, skill)` → 1:N skills per candidate, deduplicated |
@@ -74,8 +75,10 @@ roles. Passwords are stored with `werkzeug.security.generate_password_hash`
 uses `check_password_hash`; unknown email and wrong password are
 indistinguishable (`401 Invalid email or password`). Password hashes are never
 returned by any code path or rendered in any template. Sessions are signed
-Flask session cookies containing `user_id`, a CSRF token, and flash messages;
-the role is loaded from the database. Logout removes `user_id`. Already logged-in
+Flask session cookies containing `user_id`, the database generation, a CSRF token,
+and flash messages. The role is loaded from the database. A reset invalidates
+existing sessions even when account IDs are reused. Running `init-db` preserves
+the generation. Logout removes the account ID and generation. Already logged-in
 users visiting or posting to `/register` return to their home page without
 creating another account or changing sessions; they must log out to register.
 Unauthenticated access:
@@ -180,7 +183,7 @@ unsupported methods retain Flask's `404`/`405` outcomes.
 | Application detail | Candidate / owning employer | Job + employer + status + booking; booking form lists future unbooked slots of the application's employer when `Interviewing` |
 | Company profile | Employer | Company name + description |
 | My job postings | Employer | Own postings with counts; create/edit/delete/applicants |
-| Applicants | Employer | Score, candidate, skills, status, booking; status selector per row |
+| Applicants | Employer | Score, candidate display name and stable candidate ID, skills, status, booking, and a status selector per row |
 | Interview slots | Employer | Create slot (job + UTC start), list with booked state, delete unbooked |
 
 Workflow notes: a candidate applies once (duplicate POST → `409` error page);
@@ -209,8 +212,9 @@ Integer floor division (`100 * inter // len(R)`), result always an integer
 0–100. Candidate and employer views both call `app/matching.py::match_score` —
 there is exactly one implementation. Sorting: candidate dashboard by score desc,
 then case-insensitive job title, then job id; employer applicants by score desc,
-then case-insensitive candidate display name, then candidate id
-(`sort_jobs_for_candidate` / `sort_applicants_for_employer`).
+then case-insensitive candidate display name, then candidate id.
+`sort_jobs_for_candidate` and `sort_applicants_for_employer` use Unicode case
+folding for the two name comparisons.
 
 ## Interview Scheduling and Booking Transaction
 

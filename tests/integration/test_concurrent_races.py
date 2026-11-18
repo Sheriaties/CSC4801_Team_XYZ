@@ -6,15 +6,59 @@ connections (each thread in its own app context, synchronized by a barrier).
 """
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
+from app.db import get_db
 from app.errors import ConflictError, NotFoundError
 from app.services import applications as applications_service
 from app.services import auth as auth_service
 from app.services import jobs as jobs_service
 from app.services import scheduling as scheduling_service
 from app.services.scheduling import CONFLICT_BOOKED
+from tests.conftest import make_future_slot_start, make_slot_end
+
+
+@pytest.mark.parametrize("operation", ["edit_job", "delete_job", "delete_slot"])
+def test_delete_commits_before_competing_write(app, db, world, operation):
+    ids = world()
+    owner, job = ids["users"]["ana"], ids["jobs"]["backend"]
+    if operation == "delete_slot":
+        start = make_future_slot_start()
+        slot = scheduling_service.create_slot(owner, job, start, make_slot_end(start))
+    before_write, deleted = Event(), Event()
+
+    def competing_write():
+        with app.app_context():
+            # SQLite calls the trace hook before BEGIN acquires the write lock.
+            def pause_at_begin(sql):
+                if sql.startswith("BEGIN"):
+                    before_write.set()
+                    deleted.wait(timeout=10)
+
+            get_db().set_trace_callback(pause_at_begin)
+            with pytest.raises(NotFoundError):
+                if operation == "edit_job":
+                    jobs_service.update_job(owner, job, "Updated", "New description", "SQL")
+                elif operation == "delete_job":
+                    jobs_service.delete_job(owner, job)
+                else:
+                    scheduling_service.delete_slot(owner, slot)
+
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        result = worker.submit(competing_write)
+        try:
+            assert before_write.wait(timeout=10)
+            if operation == "delete_slot":
+                scheduling_service.delete_slot(owner, slot)
+            else:
+                jobs_service.delete_job(owner, job)
+        finally:
+            deleted.set()
+        result.result(timeout=10)
+    assert db.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def _setup_interviewing_pair(ids):

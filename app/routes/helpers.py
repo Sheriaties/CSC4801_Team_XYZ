@@ -52,3 +52,4 @@ def role_required(role: str):
 
 def clear_session():
     session.pop("user_id", None)
+    session.pop("database_generation", None)

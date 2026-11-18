@@ -7,11 +7,13 @@
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="title">Title</label>
-    <input id="title" name="title" type="text" value="{{ job.title if job else '' }}" required>
+    <input id="title" name="title" type="text" value="{{ request.form.get('title', job.title if job else '') }}" required>
     <label for="description">Description</label>
-    <textarea id="description" name="description" required>{{ job.description if job else '' }}</textarea>
+    <textarea id="description" name="description" required>
+{{ request.form.get('description', job.description if job else '') }}</textarea>
     <label for="skills">Required skills (comma separated; may be empty)</label>
-    <textarea id="skills" name="skills" style="min-height:4.5rem">{{ (job.required_skills | join(', ')) if job else '' }}</textarea>
+    <textarea id="skills" name="skills" style="min-height:4.5rem">
+{{ request.form.get('skills', (job.required_skills | join(', ')) if job else '') }}</textarea>
     <div class="actions">
       <button class="btn" type="submit">{{ 'Save changes' if job else 'Create job' }}</button>
       <a class="btn secondary" href="{{ url_for('employer.jobs') }}">Cancel</a>

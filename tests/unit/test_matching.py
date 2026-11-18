@@ -63,3 +63,14 @@ def test_fp_match_1_both_tie_breakers():
     ]
     ordered = sort_applicants_for_employer(rows)
     assert [row["candidate_id"] for row in ordered] == [7, 1, 2, 9]
+
+    titles = [
+        {"job_id": 2, "title": "STRASSE", "score": 50},
+        {"job_id": 1, "title": "Straße", "score": 50},
+    ]
+    assert [r["job_id"] for r in sort_jobs_for_candidate(titles)] == [1, 2]
+    names = [
+        {"candidate_id": 2, "display_name": "STRASSE", "score": 50},
+        {"candidate_id": 1, "display_name": "Straße", "score": 50},
+    ]
+    assert [r["candidate_id"] for r in sort_applicants_for_employer(names)] == [1, 2]

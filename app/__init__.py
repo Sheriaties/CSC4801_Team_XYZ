@@ -8,7 +8,7 @@ import os
 import secrets
 from pathlib import Path
 
-from flask import Flask, g, render_template, request, session
+from flask import Flask, g, redirect, render_template, request, session, url_for
 from werkzeug.routing import IntegerConverter
 from werkzeug.routing import ValidationError as RoutingValidationError
 
@@ -54,6 +54,7 @@ def create_app(test_config=None) -> Flask:
     from app.routes.auth import bp as auth_bp
     from app.routes.candidate import bp as candidate_bp
     from app.routes.employer import bp as employer_bp
+    from app.routes.helpers import clear_session
     from app.routes.jobs import bp as jobs_bp
 
     app.register_blueprint(auth_bp)
@@ -67,12 +68,19 @@ def create_app(test_config=None) -> Flask:
             session["csrf_token"] = new_csrf_token()
         g.user = None
         user_id = session.get("user_id")
+        auth_post = request.method == "POST" and request.endpoint in {"auth.login", "auth.register"}
+        g.database_generation = (
+            db_module.session_generation() if user_id is not None or auth_post else None
+        )
         if user_id is not None:
-            row = db_module.get_db().execute(
-                "SELECT id, email, role FROM users WHERE id = ?", (user_id,)
-            ).fetchone()
-            if row is not None:
-                g.user = dict(row)
+            if session.get("database_generation") == g.database_generation:
+                row = db_module.get_db().execute(
+                    "SELECT id, email, role FROM users WHERE id = ?", (user_id,)
+                ).fetchone()
+                if row is not None:
+                    g.user = dict(row)
+            if g.user is None:
+                clear_session()
         # Let Flask report unmatched routes/methods as 404/405. For protected
         # POSTs, authentication takes precedence over CSRF (FP-AUTH-3).
         if request.url_rule is None:
@@ -87,6 +95,18 @@ def create_app(test_config=None) -> Flask:
             session.get("csrf_token", ""), request.form.get("csrf_token", "")
         ):
             raise AuthorizationError("Invalid or missing CSRF token")
+
+    @app.after_request
+    def discard_response_if_reset(response):
+        # A reset can also commit while a page is being read or a login verified.
+        generation = g.get("database_generation")
+        if generation is not None and generation != db_module.session_generation():
+            clear_session()
+            g.user = None
+            if request.method == "GET":
+                return redirect(url_for("auth.login"))
+            return app.make_response(handle_app_error(AuthenticationError("Please log in")))
+        return response
 
     @app.errorhandler(AppError)
     def handle_app_error(error: AppError):

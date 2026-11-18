@@ -9,9 +9,9 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from flask import current_app, g
+from flask import current_app, g, has_request_context
 
-from app.errors import ConflictError, NotFoundError
+from app.errors import AuthenticationError, ConflictError, NotFoundError
 
 
 def object_id(value: int) -> int:
@@ -20,6 +20,10 @@ def object_id(value: int) -> int:
         raise NotFoundError("Object not found")
     return value
 
+
+SESSION_GENERATION_DDL = (
+    "CREATE TABLE IF NOT EXISTS session_generation AS SELECT hex(randomblob(16)) AS value"
+)
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -94,7 +98,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     application_id INTEGER NOT NULL UNIQUE REFERENCES applications(id) ON DELETE RESTRICT,
     created_at     TEXT NOT NULL
 );
-"""
+""" + SESSION_GENERATION_DDL + ";"
 
 
 def get_db() -> sqlite3.Connection:
@@ -116,6 +120,11 @@ def close_db(_exc=None):
     db = g.pop("db", None)
     if db is not None:
         db.close()
+
+
+def session_generation() -> str:
+    """The lifetime of the current dataset, shared by the server and seed CLI."""
+    return get_db().execute("SELECT value FROM session_generation").fetchone()[0]
 
 
 def translate_integrity_error(exc, conflict_message=None, missing_message=None):
@@ -144,8 +153,13 @@ def transaction(immediate: bool = False):
     backstop (FP-SCHED-3).
     """
     db = get_db()
-    db.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+    generation = g.get("database_generation") if has_request_context() else None
+    # Pin the dataset before checking it, so a concurrent seed cannot change
+    # which account receives a write between authentication and commit.
+    db.execute("BEGIN IMMEDIATE" if immediate or generation is not None else "BEGIN")
     try:
+        if generation is not None and generation != session_generation():
+            raise AuthenticationError("Please log in")
         yield db
         db.execute("COMMIT")
     except Exception:
@@ -172,16 +186,16 @@ def reset_db():
         "company_profiles",
         "candidate_profiles",
         "users",
+        "session_generation",
     ]
-    db.execute("BEGIN")
+    # Publish the new schema and its generation together to existing connections.
+    drops = "\n".join(f"DROP TABLE IF EXISTS {table};" for table in tables)
     try:
-        for table in tables:
-            db.execute(f"DROP TABLE IF EXISTS {table}")
-        db.execute("COMMIT")
+        db.executescript("BEGIN IMMEDIATE;\n" + drops + "\n" + SCHEMA + "\nCOMMIT;")
     except Exception:
-        db.execute("ROLLBACK")
+        if db.in_transaction:
+            db.rollback()
         raise
-    init_db()
 
 
 def init_app(app):
@@ -189,3 +203,7 @@ def init_app(app):
     path = Path(app.config["DATABASE"])
     if path.parent and str(path.parent) not in ("", "."):
         path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        # Upgrade existing installations without resetting their accounts or data.
+        with app.app_context():
+            get_db().execute(SESSION_GENERATION_DDL)

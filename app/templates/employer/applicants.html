@@ -12,7 +12,7 @@
       {% for row in applicants %}
       <tr>
         <td class="score">{{ row.score }}</td>
-        <td>{{ row.display_name }}</td>
+        <td>{{ row.display_name }} <span class="muted">#{{ row.candidate_id }}</span></td>
         <td>
           {% if row.skills %}
             {% for skill in row.skills %}<span class="pill">{{ skill }}</span>{% endfor %}
@@ -31,7 +31,7 @@
         <td>
           <form class="inline" method="post" action="{{ url_for('employer.set_status', application_id=row.application_id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <select id="status-{{ row.application_id }}" name="status" aria-label="Application status for {{ row.display_name }}">
+            <select id="status-{{ row.application_id }}" name="status" aria-label="Application status for {{ row.display_name }} #{{ row.candidate_id }}">
               {% for status in ['Pending', 'Interviewing', 'Rejected', 'Accepted'] %}
               <option value="{{ status }}" {% if row.status == status %}selected{% endif %}>{{ status }}</option>
               {% endfor %}

@@ -1,6 +1,6 @@
 """Registration, login, and logout routes (FP-AUTH-1)."""
 
-from flask import Blueprint, flash, redirect, render_template, request, session, url_for
+from flask import Blueprint, flash, g, redirect, render_template, request, session, url_for
 
 from app.errors import AppError
 from app.routes.helpers import clear_session, current_user, login_required
@@ -12,6 +12,7 @@ def _start_session(user_id: int):
     csrf = session.get("csrf_token")
     session.clear()
     session["user_id"] = user_id
+    session["database_generation"] = g.database_generation
     session["csrf_token"] = csrf
 
 

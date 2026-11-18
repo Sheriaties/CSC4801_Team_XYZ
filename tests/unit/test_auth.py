@@ -1,8 +1,70 @@
 """Unit tests for FP-AUTH-1..3: accounts, credential storage, server-side authorization."""
 
 import pytest
+from flask import request
 
+from app.db import get_db, init_db, session_generation
 from app.errors import ConflictError
+from app.seed import DEMO_PASSWORD, seed_demo_data
+
+
+def test_reseed_expires_sessions_but_init_db_preserves_them(client, app):
+    with app.app_context():
+        seed_demo_data()
+    assert client.login("alice@demo.local", DEMO_PASSWORD).status_code == 302
+    with app.app_context():
+        init_db()
+    assert client.get("/profile").status_code == 200
+
+    with app.app_context():
+        seed_demo_data()
+    assert client.post("/profile", {"display_name": "Old session"}).status_code == 401
+    assert client.get("/profile").headers["Location"] == "/login"
+    assert client.login("alice@demo.local", DEMO_PASSWORD).status_code == 302
+    assert b"Alice Chen" in client.get("/profile").data
+
+
+def test_session_without_dataset_generation_requires_login(client):
+    assert client.register("legacy@example.com", "Password123!", "Candidate", display_name="Legacy").status_code == 302
+    with client._client.session_transaction() as cookie:
+        cookie.pop("database_generation", None)
+    assert client.get("/profile").headers["Location"] == "/login"
+    assert client.login("legacy@example.com", "Password123!").status_code == 302
+    assert client.get("/profile").status_code == 200
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_reset_during_profile_request_invalidates_read_or_write(client, app, method):
+    # Reset after Flask has loaded the current user, before the view runs.
+    @app.before_request
+    def reseed_before_profile():
+        if request.path == "/profile":
+            with app.app_context():
+                seed_demo_data()
+
+    old_account = client.register(
+        "previous@test.local", "Password123!", "Candidate", display_name="Previous candidate"
+    )
+    assert old_account.status_code == 302
+    with app.app_context():
+        previous_id = get_db().execute(
+            "SELECT id FROM users WHERE email = ?", ("previous@test.local",)
+        ).fetchone()["id"]
+    if method == "GET":
+        response = client.get("/profile")
+        assert response.status_code == 302
+        assert response.headers["Location"] == "/login"
+        assert b"Alice Chen" not in response.data
+    else:
+        response = client.post("/profile", {"display_name": "Old draft", "skills": ""})
+        assert response.status_code == 401
+    with app.app_context():
+        profile = get_db().execute(
+            "SELECT user_id, display_name FROM candidate_profiles JOIN users ON users.id = user_id "
+            "WHERE users.email = ?", ("alice@demo.local",)
+        ).fetchone()
+        assert profile["user_id"] == previous_id
+        assert profile["display_name"] == "Alice Chen"
 
 
 def test_fp_auth_1_registration_preserves_existing_session(client, db):
@@ -111,8 +173,11 @@ def test_home_uses_existing_login_session(client, role, destination):
 
 def test_home_treats_a_session_for_a_missing_user_as_logged_out(app):
     client = app.test_client()
+    with app.app_context():
+        generation = session_generation()
     with client.session_transaction() as session:
         session["user_id"] = 99999
+        session["database_generation"] = generation
 
     response = client.get("/")
     assert response.status_code == 302

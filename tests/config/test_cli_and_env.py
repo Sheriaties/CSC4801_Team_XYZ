@@ -96,6 +96,21 @@ def test_app_factory_isolates_databases(tmp_path):
         assert get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"] == 0
 
 
+def test_existing_database_gains_session_generation_without_reset(app):
+    from app import create_app
+    from app.db import get_db
+    from app.services import auth
+    from tests.system.conftest import Browser
+
+    with app.app_context():
+        auth.register_user("existing@demo.local", "Password123!", "Employer", company_name="Existing Company")
+        get_db().execute("DROP TABLE session_generation")
+    upgraded = create_app({"DATABASE": app.config["DATABASE"], "SECRET_KEY": app.config["SECRET_KEY"]})
+    browser = Browser(upgraded)
+    assert browser.login("existing@demo.local", "Password123!").status_code == 302
+    assert b"Existing Company" in browser.get("/company").data
+
+
 def test_secret_key_env_var_is_honored(tmp_path, monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "env-secret-value")
     monkeypatch.setenv("DATABASE", str(tmp_path / "env.sqlite3"))

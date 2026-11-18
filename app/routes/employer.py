@@ -49,7 +49,7 @@ def jobs():
 def new_job():
     if request.method == "POST":
         try:
-            job_id = jobs_service.create_job(
+            jobs_service.create_job(
                 current_user_id(),
                 title=request.form.get("title", ""),
                 description=request.form.get("description", ""),
@@ -65,9 +65,6 @@ def new_job():
 @bp.route("/jobs/<int:job_id>/edit", methods=("GET", "POST"))
 @role_required("Employer")
 def edit_job(job_id: int):
-    # Ownership is enforced before any content is loaded or rendered (FP-EMP-2):
-    # a foreign employer gets 403 on the GET form as well as the POST.
-    jobs_service.get_owned_job(current_user_id(), job_id)
     if request.method == "POST":
         try:
             jobs_service.update_job(

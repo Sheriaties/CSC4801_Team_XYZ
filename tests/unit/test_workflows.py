@@ -1,5 +1,8 @@
 """Unit tests for FP-CAN-1..3 and FP-EMP-1..3: candidate and employer workflows."""
 
+import re
+from html import unescape
+
 import pytest
 
 from app.errors import AuthorizationError, ConflictError, NotFoundError, ValidationError
@@ -8,6 +11,66 @@ from app.services import jobs as jobs_service
 from app.services import profiles as profiles_service
 from app.services import scheduling as scheduling_service
 from tests.conftest import make_future_slot_start, make_slot_end
+
+
+def _textarea_value(response, name):
+    html = response.get_data(as_text=True)
+    match = re.search(rf'<textarea\b[^>]*\bname="{name}"[^>]*>(.*?)</textarea>', html, re.S)
+    assert match, f"Missing textarea {name}"
+    # HTML normalizes line endings and consumes one LF after the opening tag.
+    value = match.group(1).replace("\r\n", "\n").replace("\r", "\n")
+    return unescape(value.removeprefix("\n"))
+
+
+@pytest.mark.parametrize("leading_lines", [0, 1, 2])
+def test_resume_round_trip_preserves_leading_lines(client, db, leading_lines):
+    client.register("resume@test.local", "Password123!", "Candidate", display_name="Author")
+    candidate = db.execute("SELECT id FROM users WHERE email = ?", ("resume@test.local",)).fetchone()[0]
+    url = f"/candidates/{candidate}/resume"
+    original = "\r\n" * leading_lines + "Research & development <2026>\r\n"
+    assert client.post(url, {"resume_text": original}).status_code == 302
+    value = _textarea_value(client.get(url), "resume_text")
+    assert value == original.replace("\r\n", "\n")
+    assert client.post(url, {"resume_text": value.replace("\n", "\r\n")}).status_code == 302
+    assert profiles_service.read_resume(candidate, candidate) == original
+
+
+@pytest.mark.parametrize("editing", [False, True])
+def test_invalid_job_form_retains_draft(client, db, editing):
+    client.register("owner@test.local", "Password123!", "Employer", company_name="Owner")
+    url = "/employer/jobs/new"
+    if editing:
+        assert client.post(url, {"title": "Current", "description": "Saved", "skills": "Go"}).status_code == 302
+        url = "/jobs/1/edit"
+    draft = {"title": " ", "description": "\nNew <role> & team", "skills": "Go, SQL"}
+    response = client.post(url, draft)
+    assert response.status_code == 400
+    assert _textarea_value(response, "description") == draft["description"]
+    assert _textarea_value(response, "skills") == draft["skills"]
+    if editing:
+        assert jobs_service.get_job(1)["description"] == "Saved"
+    else:
+        assert db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+    assert client.post(url, {**draft, "title": "Corrected"}).status_code == 302
+    assert jobs_service.get_job(1)["required_skills"] == ["go", "sql"]
+
+
+def test_applicants_with_same_name_have_distinct_visible_ids(client, db, world):
+    ids = world()
+    job = ids["jobs"]["backend"]
+    for candidate in (ids["users"]["alice"], ids["users"]["bob"]):
+        profiles_service.update_candidate_profile(candidate, "Alex Li", "SQL")
+        applications_service.apply_to_job(candidate, job)
+    client.login("ana@test.local", "Password123!")
+    html = client.get(f"/jobs/{job}/applicants").get_data(as_text=True)
+    rows = re.findall(r"<tr>(.*?)</tr>", html, re.S)
+    for application in applications_service.list_applicants(ids["users"]["ana"], job):
+        candidate = application["candidate_id"]
+        action = f'/applications/{application["application_id"]}/status'
+        row, = [row for row in rows if action in row]
+        visible = unescape(re.sub(r"<[^>]+>", "", row))
+        assert f"Alex Li #{candidate}" in visible
+        assert f'aria-label="Application status for Alex Li #{candidate}"' in row
 
 
 def test_fp_can_1_profile_and_private_resume_rules(client, app, world):

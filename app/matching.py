@@ -48,12 +48,12 @@ def match_score(candidate_skills: Iterable[str], required_skills: Iterable[str])
 
 def sort_jobs_for_candidate(rows: Sequence[dict]) -> list[dict]:
     """Sort candidate-dashboard rows: score desc, title (case-insensitive) asc, job id asc."""
-    return sorted(rows, key=lambda row: (-row["score"], row["title"].lower(), row["job_id"]))
+    return sorted(rows, key=lambda row: (-row["score"], row["title"].casefold(), row["job_id"]))
 
 
 def sort_applicants_for_employer(rows: Sequence[dict]) -> list[dict]:
     """Sort employer-applicant rows: score desc, display name (case-insensitive) asc, candidate id asc."""
     return sorted(
         rows,
-        key=lambda row: (-row["score"], row["display_name"].lower(), row["candidate_id"]),
+        key=lambda row: (-row["score"], row["display_name"].casefold(), row["candidate_id"]),
     )

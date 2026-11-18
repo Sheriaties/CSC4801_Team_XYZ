@@ -64,7 +64,11 @@ with `python manage.py seed` (drops and recreates all tables), or delete
 
 ## Demo Data and Reset Command
 
-One documented command **resets and seeds** the local database (FP-DOC-3):
+One documented command **resets and seeds** the local database (FP-DOC-3).
+Anyone already signed in must log in again after the reset, including when a
+fixed `SECRET_KEY` is configured. On the first startup after upgrading from
+an older version, the application preserves existing accounts and records.
+Users signed in on the old version must log in once to start a new session.
 
 ```bash
 python manage.py seed
@@ -76,8 +80,8 @@ one empty-skill job carrying FP-MATCH-1 example 4, the four matching examples as
 literal skill pairs, applications covering all four statuses, and future
 interview slots — Alice and Bob are both `Interviewing` on the same job and can
 race for the same available slot). Slot start times are "tomorrow at
-15:00/16:00/17:00 UTC" relative to seed time so they are always in the future;
-everything else is constant.
+15:00/16:00/17:00 UTC" relative to seed time. Each reset restores the same
+demo accounts, jobs, skills and application statuses.
 
 **Local/demo credentials only** (reserved `demo.local` domain — never real
 accounts):

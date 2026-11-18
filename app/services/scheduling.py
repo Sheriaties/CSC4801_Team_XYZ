@@ -61,14 +61,15 @@ def delete_slot(employer_id: int, slot_id: int) -> None:
     transaction; ``bookings.slot_id ON DELETE RESTRICT`` is the DB-level
     backstop so a racing booking can never be cascade-deleted.
     """
-    db = get_db()
-    slot = db.execute("SELECT * FROM interview_slots WHERE id = ?", (object_id(slot_id),)).fetchone()
-    if slot is None:
-        raise NotFoundError("Slot not found")
-    if slot["employer_id"] != employer_id:
-        raise AuthorizationError("You do not own this slot")
     try:
-        with transaction(immediate=True):
+        with transaction(immediate=True) as db:
+            slot = db.execute(
+                "SELECT employer_id FROM interview_slots WHERE id = ?", (object_id(slot_id),)
+            ).fetchone()
+            if slot is None:
+                raise NotFoundError("Slot not found")
+            if slot["employer_id"] != employer_id:
+                raise AuthorizationError("You do not own this slot")
             booked = db.execute("SELECT 1 FROM bookings WHERE slot_id = ?", (slot_id,)).fetchone()
             if booked is not None:
                 raise ConflictError("Cannot delete a booked slot")
