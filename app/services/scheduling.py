@@ -7,6 +7,7 @@ attempts produce exactly one booking; the loser gets HTTP 409 with the message
 ``Slot already booked``.
 """
 
+import re
 import sqlite3
 from datetime import timedelta
 
@@ -17,12 +18,25 @@ from app.timeutils import SLOT_MINUTES, is_future, parse_iso, to_iso, utc_now
 CONFLICT_BOOKED = "Slot already booked"
 
 
+# Accepted forms: YYYY-MM-DDTHH:MM[:SS[.fff]] with an optional zone (Z or +HH:MM/-HH:MM;
+# no zone = UTC). Date-only, space-separated, compact and week-date forms are rejected.
+SLOT_TIME_FORMAT = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})?$"
+)
+SLOT_TIME_HELP = "Times must be ISO-8601 UTC, e.g. 2026-05-01T15:00:00Z"
+
+
 def _validate_slot_times(start_utc: str, end_utc: str) -> tuple[str, str]:
     try:
+        for value in (start_utc, end_utc):
+            if not isinstance(value, str) or not SLOT_TIME_FORMAT.match(value.strip()):
+                raise ValueError(value)
         start = parse_iso(start_utc)
         end = parse_iso(end_utc)
     except (ValueError, TypeError, OverflowError):
         raise ValidationError("Times must be ISO-8601 UTC, e.g. 2026-05-01T15:00:00Z")
+    if start.microsecond or end.microsecond:
+        raise ValidationError("Times must be whole seconds")
     if end <= start:
         raise ValidationError("End time must be after start time")
     if end - start != timedelta(minutes=SLOT_MINUTES):
@@ -51,7 +65,9 @@ def create_slot(employer_id: int, job_id: int, start_utc: str, end_utc: str) -> 
             return cur.lastrowid
     except sqlite3.IntegrityError as exc:
         # FOREIGN KEY: the job vanished between the ownership check and insert.
-        translate_integrity_error(exc, missing_message="Job not found")
+        translate_integrity_error(
+            exc, conflict_message="An identical slot already exists", missing_message="Job not found"
+        )
 
 
 def delete_slot(employer_id: int, slot_id: int) -> None:
@@ -94,10 +110,17 @@ def list_slots_for_employer(employer_id: int) -> list[dict]:
         (employer_id,),
     ).fetchall()
     now = utc_now()
-    return [
-        {**dict(row), "available": row["booking_id"] is None and is_future(row["start_utc"], now)}
-        for row in rows
-    ]
+    result = []
+    for row in rows:
+        slot = dict(row)
+        slot["available"] = slot["booking_id"] is None and is_future(slot["start_utc"], now)
+        slot["state"] = (
+            "booked" if slot["booking_id"] is not None
+            else "available" if slot["available"]
+            else "past"
+        )
+        result.append(slot)
+    return result
 
 
 def list_available_slots(employer_id: int) -> list[dict]:

@@ -6,15 +6,17 @@ business rules/ownership checks. Error pages carry the FP-AUTH-3 status contract
 
 import os
 import secrets
+import sqlite3
 from pathlib import Path
 
 from flask import Flask, g, redirect, render_template, request, session, url_for
+from flask.sessions import SecureCookieSessionInterface
 from werkzeug.routing import IntegerConverter
 from werkzeug.routing import ValidationError as RoutingValidationError
 
 from app import db as db_module
-from app.errors import AppError, AuthenticationError, AuthorizationError
-from app.security import csrf_token_valid, new_csrf_token
+from app.errors import AppError, AuthenticationError, AuthorizationError, RateLimitError
+from app.security import RateLimiter, csrf_token_valid, new_csrf_token
 from app.timeutils import format_display
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -37,6 +39,31 @@ class SafeIntegerConverter(IntegerConverter):
             raise RoutingValidationError() from exc
 
 
+def _env_bool(name: str):
+    value = os.environ.get(name)
+    return None if value is None else value.strip().lower() in ("1", "true", "yes", "on")
+
+
+SECURITY_HEADERS = {
+    # Scripts only from our own origin (no inline/eval); inline <style> for the template styles.
+    "Content-Security-Policy": (
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+}
+
+
+class _SessionInterface(SecureCookieSessionInterface):
+    def get_cookie_secure(self, app):
+        configured = app.config.get("SESSION_COOKIE_SECURE")
+        return request.is_secure if configured is None else bool(configured)
+
+
 def create_app(test_config=None) -> Flask:
     app = Flask(__name__)
     # Bound the ``<int:...>`` converter before any blueprint rule is added.
@@ -45,10 +72,38 @@ def create_app(test_config=None) -> Flask:
         SECRET_KEY=os.environ.get("SECRET_KEY") or secrets.token_hex(32),
         DATABASE=os.environ.get("DATABASE") or str(BASE_DIR / "data" / "app.sqlite3"),
         PORT=int(os.environ.get("PORT", "8080")),
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        # None => "Secure" exactly when the request arrived over HTTPS (so plain-HTTP
+        # local demos keep working); set True/False (env SESSION_COOKIE_SECURE=1/0) to force.
+        SESSION_COOKIE_SECURE=_env_bool("SESSION_COOKIE_SECURE"),
+        # Docker/NAT: every client may share one source IP, so the IP-keyed login/register
+        # limits are switched off in the image (RATE_LIMIT_ENABLED=0 in the Dockerfile);
+        # behind a real proxy set TRUSTED_PROXY_COUNT so the true client IP is used.
+        RATE_LIMIT_ENABLED=_env_bool("RATE_LIMIT_ENABLED") is not False,
+        TRUSTED_PROXY_COUNT=int(os.environ.get("TRUSTED_PROXY_COUNT", "0")),
+        # Paid-API guard, keyed by *user id* (never by IP), so shared IPs cannot collide.
+        EXPLAIN_LIMIT=10,
+        EXPLAIN_WINDOW_SECONDS=600,
+        LOGIN_FAILURE_LIMIT=5,  # failed logins per email+IP ...
+        LOGIN_IP_FAILURE_LIMIT=30,  # ... or per IP ...
+        LOGIN_WINDOW_SECONDS=900,  # ... within this window => 429
+        REGISTER_LIMIT=20,  # registration attempts per IP per hour => 429
+        REGISTER_WINDOW_SECONDS=3600,
+        # Optional FP-MATCH-2 explanations. Unset => deterministic non-LLM text only.
+        LLM_API_KEY=os.environ.get("ANTHROPIC_API_KEY") or None,
+        LLM_MODEL=os.environ.get("LLM_MODEL", "claude-haiku-4-5-20251001"),
     )
     if test_config:
         app.config.update(test_config)
 
+    if app.config["TRUSTED_PROXY_COUNT"] > 0:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        n = app.config["TRUSTED_PROXY_COUNT"]
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=n, x_proto=n)
+    app.session_interface = _SessionInterface()
+    app.extensions["rate_limiter"] = RateLimiter()
     db_module.init_app(app)
 
     from app.routes.auth import bp as auth_bp
@@ -97,23 +152,50 @@ def create_app(test_config=None) -> Flask:
             raise AuthorizationError("Invalid or missing CSRF token")
 
     @app.after_request
-    def discard_response_if_reset(response):
+    def finalize_response(response):
         # A reset can also commit while a page is being read or a login verified.
         generation = g.get("database_generation")
         if generation is not None and generation != db_module.session_generation():
             clear_session()
             g.user = None
             if request.method == "GET":
-                return redirect(url_for("auth.login"))
-            return app.make_response(handle_app_error(AuthenticationError("Please log in")))
+                response = app.make_response(redirect(url_for("auth.login")))
+            else:
+                response = app.make_response(handle_app_error(AuthenticationError("Please log in")))
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        if g.get("user") is not None or request.endpoint in ("auth.login", "auth.register"):
+            # Private pages must not be stored or replayed from caches/back button.
+            response.headers["Cache-Control"] = "no-store"
+        if request.is_secure:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
         return response
 
     @app.errorhandler(AppError)
     def handle_app_error(error: AppError):
-        return render_template("errors/error.html", error=error), error.status
+        response = render_template("errors/error.html", error=error), error.status
+        if isinstance(error, RateLimitError):
+            response = app.make_response(response)
+            response.headers["Retry-After"] = str(error.retry_after)
+        return response
 
     @app.errorhandler(404)
     def handle_404(_error):
+        return render_template("errors/error.html", error=AppError("Not found", status=404)), 404
+
+    @app.errorhandler(sqlite3.OperationalError)
+    def handle_db_busy(error):
+        if "locked" in str(error) or "busy" in str(error):
+            # Writers are serialized (BEGIN IMMEDIATE); a very long wait surfaces as
+            # a retryable 503 rather than a 500 or a half-applied change.
+            return render_template(
+                "errors/error.html", error=AppError("Database busy, please retry", status=503)
+            ), 503
+        raise error
+
+    @app.errorhandler(OverflowError)
+    def handle_overflow(_error):
+        # An id too large for SQLite INTEGER can never name an existing object.
         return render_template("errors/error.html", error=AppError("Not found", status=404)), 404
 
     @app.errorhandler(405)

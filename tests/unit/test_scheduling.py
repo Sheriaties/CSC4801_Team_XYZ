@@ -365,3 +365,45 @@ def test_fp_sched_1_employer_availability_after_start(client, app, world, monkey
     assert b">available<" not in page.data
     assert b">expired<" in page.data
     assert b"booked (application #" in page.data
+
+
+def test_fp_sched_3_real_concurrent_bookings_one_winner(app, world):
+    """Two threads, separate DB connections, same slot: exactly one booking row."""
+    import threading
+
+    ids = world()
+    ana, alice, bob = ids["users"]["ana"], ids["users"]["alice"], ids["users"]["bob"]
+    alice_app = _interview_app(app, ids, "alice", "backend")
+    bob_app = _interview_app(app, ids, "bob", "backend")
+    start = make_future_slot_start()
+    with app.app_context():
+        slot_id = scheduling_service.create_slot(
+            ana, ids["jobs"]["backend"], start, make_slot_end(start)
+        )
+
+    barrier = threading.Barrier(2)
+    outcomes = []
+
+    def attempt(candidate, application):
+        with app.app_context():  # own app context => own SQLite connection
+            barrier.wait()
+            try:
+                scheduling_service.book_slot(candidate, application, slot_id)
+                outcomes.append("ok")
+            except ConflictError as exc:
+                outcomes.append((exc.status, exc.message))
+
+    threads = [
+        threading.Thread(target=attempt, args=(alice, alice_app)),
+        threading.Thread(target=attempt, args=(bob, bob_app)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert sorted(map(str, outcomes)) == sorted(["ok", str((409, "Slot already booked"))])
+    with app.app_context():
+        assert get_db().execute(
+            "SELECT COUNT(*) AS n FROM bookings WHERE slot_id = ?", (slot_id,)
+        ).fetchone()["n"] == 1

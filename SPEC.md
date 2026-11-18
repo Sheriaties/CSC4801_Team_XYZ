@@ -16,8 +16,8 @@ Exactly two application roles exist: `Candidate` and `Employer` (FP-AUTH-1).
 Candidates: profile + technical skills + private raw-text resume; ranked job
 recommendations; apply-once applications; interview slot booking. Employers:
 company profile; job postings with required skills; applicant management with
-four statuses; 30-minute interview availability slots. No LLM is used anywhere
-(FP-MATCH-2 is not implemented).
+four statuses; 30-minute interview availability slots. The optional advisory AI
+match explanation (FP-MATCH-2) is implemented and off unless a key is configured.
 
 ## Architecture
 
@@ -54,7 +54,7 @@ Schema DDL: `app/db.py` (`SCHEMA`). All timestamps are UTC ISO-8601
 | `jobs` | `id`, `employer_id`, `title`, `description`, `created_at` | N:1 `users.id` (employer owner) |
 | `job_skills` | `job_id`, `skill` | PK `(job_id, skill)` → 1:N required skills per job (may be empty) |
 | `applications` | `id`, `job_id`, `candidate_id`, `status`, `created_at` | `UNIQUE (job_id, candidate_id)` enforces apply-once (the constraint itself is the race-safe duplicate detector → 409); `status IN ('Pending','Interviewing','Rejected','Accepted')`; `job_id` FK is `ON DELETE RESTRICT` |
-| `interview_slots` | `id`, `job_id`, `employer_id`, `start_utc`, `end_utc`, `created_at` | N:1 `jobs.id` (`ON DELETE RESTRICT`); `employer_id` is the slot owner (must equal the job's employer at creation); `CHECK (end_utc > start_utc)` |
+| `interview_slots` | `id`, `job_id`, `employer_id`, `start_utc`, `end_utc`, `created_at` | N:1 `jobs.id` (`ON DELETE RESTRICT`); `employer_id` is the slot owner (must equal the job's employer at creation); `CHECK (end_utc > start_utc)`; unique index on `(employer_id, job_id, start_utc, end_utc)` (no identical duplicate slots) |
 | `bookings` | `id`, `slot_id`, `application_id`, `created_at` | `UNIQUE (slot_id)` one booking per slot; `UNIQUE (application_id)` one booking per application — the FP-SCHED-3 DB backstop; both FKs `ON DELETE RESTRICT` |
 
 Deletion rules: a job may be deleted only when it has **no applications and no
@@ -85,7 +85,8 @@ Unauthenticated access:
 
 - `GET` of a protected page → `302` redirect to `/login` (the FP-AUTH-3
   "redirect to login" option);
-- any other method → `401 Unauthorized` page.
+- `POST` to a protected operation → `401 Unauthorized`, including when no CSRF
+  token was supplied. Login and registration still require a valid CSRF token.
 
 **Authorization (FP-AUTH-3, FP-SEC-1).** Every protected operation is enforced
 on the server: request handling and route decorators check authentication and
@@ -96,11 +97,13 @@ observable contract:
 
 | Situation | Outcome |
 |---|---|
-| Unauthenticated | `401` (or login redirect for GET pages) |
+| Unauthenticated | login redirect for GET pages; `401` for protected POST operations |
 | Authenticated, wrong role or not the owner | `403 Forbidden` |
 | Object missing that the caller could otherwise access | `404 Not Found` |
 | Conflicting state (duplicate application, booked slot, job with dependents, booking race loser) | `409 Conflict` |
 | Invalid input | `400` |
+| Too many login/registration attempts | `429 Too Many Requests` with `Retry-After` |
+| Database write lock not obtained within 5 s | `503 Database busy, please retry` (nothing is changed) |
 
 Ownership map: resumes are readable/replaceable only by their owning candidate
 (any other candidate or employer gets `403` on direct URL); applications are
@@ -135,7 +138,7 @@ return `405`.
 |---|---|---|---|
 | `/dashboard` | GET | Candidate | All jobs with match scores, sorted desc (FP-CAN-2) |
 | `/profile` | GET, POST | Candidate | View/edit own display name + skills |
-| `/candidates/<cid>/resume` | GET | Candidate owner | View own resume (`403` others incl. employers, `404` missing) |
+| `/candidates/<cid>/resume` | GET | Candidate owner | View own resume (`403` for everyone else incl. employers — also for ids that do not exist, so ids cannot be enumerated; `404` only if the owner has no profile row) |
 | `/candidates/<cid>/resume` | POST | Candidate owner | Replace own resume text |
 | `/applications` | GET | Candidate | Own applications with job, employer, status, booking |
 | `/applications/<id>` | GET | Candidate owner | Application detail; booking UI when `Interviewing` and unbooked (`403` other candidates) |
@@ -145,7 +148,8 @@ return `405`.
 
 | Route | Method | Who | Behavior |
 |---|---|---|---|
-| `/jobs/<id>` | GET | any logged-in | Job detail (title, company, description, skills) |
+| `/jobs/<id>` | GET | any logged-in | Job detail (title, company, description, skills); candidates also see their score with matched/missing skills (deterministic) |
+| `/jobs/<id>/explain` | POST | Candidate | Optional FP-MATCH-2: adds an AI-worded explanation (see Optional AI Features); `403` for employers |
 | `/jobs/<id>/apply` | POST | Candidate | Apply once; new application `Pending`; duplicate → `409` |
 | `/bookings` | POST | Candidate | Book `application_id` + `slot_id`; FP-SCHED-2 eligibility; race loser → `409 Slot already booked` |
 
@@ -161,7 +165,7 @@ return `405`.
 | `/jobs/<id>/applicants` | GET | Employer owner | Applicants sorted by score with full rows (FP-EMP-3) |
 | `/applications/<id>/status` | POST | Employer owner | Set `Pending/Interviewing/Rejected/Accepted`; redirect to the application's stored job (no submitted `job_id` needed) |
 | `/employer/slots` | GET | Employer | Own slots with booked/available/expired state |
-| `/employer/slots` | POST | Employer | Create a future 30-minute slot for one owned job (form takes start; end = start + 30 min) |
+| `/employer/slots` | POST | Employer | Create a future 30-minute slot for one owned job (form takes start and derives end; an explicit `end_utc` is also validated for exact duration) |
 | `/slots/<id>/delete` | POST | Employer owner | Delete unbooked slot; `409` if booked |
 
 Protected POSTs check authentication first (`401` when logged out, including
@@ -169,6 +173,8 @@ missing/stale sessions, regardless of the submitted CSRF token). Public login
 and registration POSTs, and authenticated POSTs, require a valid session CSRF
 token (`403` for missing, incorrect, or non-ASCII tokens). Unmatched routes and
 unsupported methods retain Flask's `404`/`405` outcomes.
+AI explanation requests are limited to 10 per user per 10 minutes when an LLM
+is configured (`429` with `Retry-After`); the limit is keyed by user ID.
 
 ## User Interface and Workflows
 
@@ -194,7 +200,7 @@ linked and the slot remains unavailable.
 
 ## Matching Algorithm and Skill Storage
 
-**Skill storage.** Free-text input (`Python, SQL`) is split on commas/newlines
+**Skill storage.** Free-text input (`Python, SQL`) is split on commas and newlines
 and normalized: trim whitespace, lowercase, drop empties, drop duplicates
 (`app/matching.py::parse_skills_text` / `normalize_skills`). Normalized skills
 are stored one per row in `candidate_skills` and `job_skills` (PK-deduplicated)
@@ -221,8 +227,9 @@ folding for the two name comparisons.
 **Slots (FP-SCHED-1).** Exact start/end UTC instants, always exactly 30 minutes,
 always created in the future. One owner (the creating employer) and one job
 posting (so job deletion correctly reports dependent interview slots — FP-EMP-2).
-Creation rejects: malformed or overflowing timestamps, end ≤ start, any duration other than 30
-minutes, non-future start, foreign/missing job (`403`/`404`). Deletion rejects a
+Creation rejects: malformed or overflowing timestamps, an identical slot (`409`),
+end ≤ start, any duration other than 30 minutes (including fractional-second
+drift), non-future start, foreign/missing job (`403`/`404`). Deletion rejects a
 booked slot (`409`) and a foreign/missing slot (`403`/`404`). Availability
 listings exclude booked and past slots. The employer's management list retains
 all slots: booked slots remain labeled booked; unbooked slots at or before their
@@ -264,16 +271,48 @@ gets HTTP `409` and that message.
 | XSS (FP-SEC-3) | All user text (profile, resume, company, job, search-like fields) rendered through Jinja2 autoescaping; no `\|safe` filters; `escape_html` helper for non-template paths; `<script>alert(1)</script>` unit test |
 | CSRF | Per-session token on public auth POSTs and authenticated POSTs; protected anonymous POSTs fail authentication first; malformed tokens fail safely |
 | Secrets & test isolation (FP-SEC-4) | No real secrets/personal data in the repository (demo data uses `demo.local`); `.env.example` placeholders only; unit tests use per-test isolated SQLite files and never call third-party services |
-| Sessions | Signed HttpOnly cookies; logout removes authenticated user ID; optional `SECRET_KEY` env var |
+| Response headers | CSP allows only same-origin scripts; `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and COOP are set; private responses use `Cache-Control: no-store`; HTTPS responses use HSTS |
+| Rate limiting | Process-local sliding window: failed login and registration limits can return `429`; the AI explanation limit is keyed by user ID. Docker disables IP-keyed limits because clients share a gateway IP |
+| Sessions | Signed HttpOnly, `SameSite=Lax` cookies; `Secure` follows HTTPS unless overridden by `SESSION_COOKIE_SECURE`; logout removes authenticated user ID and database generation; optional `SECRET_KEY` env var |
 
 ## Optional AI Features and Data Flow
 
-**Not implemented** (FP-MATCH-2 marked `N/A` in the README mapping). No
-user-controlled text is sent to any LLM or external service; there is no prompt,
-no model key, and no AI data flow to document. The deterministic skill-overlap
-score is the only ranking signal.
+**Implemented (FP-MATCH-2)** in `app/ai.py`; routes `GET /jobs/<id>` (deterministic
+breakdown) and `POST /jobs/<id>/explain` (adds AI text).
+
+- **Never affects scoring.** The score and every ordering come from
+  `app/matching.py` only; AI text is displayed separately and never parsed.
+- **No credentials needed.** Without `ANTHROPIC_API_KEY` the "Explain with AI"
+  button is not shown and the page shows the deterministic explanation
+  (`breakdown()`: matched / missing skills). Tests inject a fake client and never
+  reach the network (`LLM_API_KEY`/`LLM_CLIENT` config).
+- **Data sent** (only when a key is set *and* the candidate clicks the button):
+  the candidate's normalized skill list and the job's normalized required
+  skills (each ≤ 40 chars, ≤ 50 items) as a JSON payload to the Anthropic
+  Messages API. Resume text, names, emails, descriptions and ids are never sent.
+- **Output filter** (`ai.sanitize_reply`): a reply is discarded (deterministic text
+  shown instead) if it quotes the system prompt, mentions prompt/key words,
+  contains a configured secret, contains a URL/markdown link, or states any number
+  other than the real score or the matched/missing/required skill counts.
+- **Untrusted text.** Skills are user-controlled; they are sent only in the JSON
+  user message (never in the system prompt), and the system prompt instructs the
+  model to treat them as data. The system prompt and API key are never rendered
+  or returned. The reply is whitespace-normalized, capped at 400 chars and
+  rendered via Jinja2 autoescaping; any failure falls back to the deterministic text.
 
 ## Design Decisions and Limitations
+
+- **Slot time input** (applies to both start and end, in the form and over HTTP):
+  `YYYY-MM-DDTHH:MM[:SS]` plus an optional zone — `Z`, or a numeric offset such as
+  `+02:00` / `-05:00` (start and end may use different offsets; each is converted to
+  UTC and stored as `...Z`), or no zone, which means UTC. Whole seconds are allowed,
+  fractional seconds are rejected. Date-only, space-separated, compact
+  (`20990101T100000Z`), week-date and offset-without-colon forms are rejected with `400`.
+  The documented timezone is UTC; nothing is ever stored in local time.
+- **Duplicate / overlapping slots:** the identical slot (same employer, job, start and
+  end) cannot be created twice — `409 An identical slot already exists`, enforced by the
+  unique index `ux_interview_slots_identical` so concurrent creations also yield one row.
+  Partially overlapping slots are allowed on purpose (e.g. several interviewers).
 
 - **Stack:** Python 3.12 / Flask 3.1 / SQLite / waitress — minimal dependency
   surface (the starter lockfile), easy clean-checkout grading, single Docker
@@ -301,4 +340,4 @@ score is the only ranking signal.
   Interviewing status`, `Slot is in the past`, `Application already has a
   booking`).
 - **No pagination** on lists (course-scale data); no PDF resume extraction
-  (optional in the requirements); no LLM (see above).
+  (optional in the requirements).

@@ -25,6 +25,8 @@ SESSION_GENERATION_DDL = (
     "CREATE TABLE IF NOT EXISTS session_generation AS SELECT hex(randomblob(16)) AS value"
 )
 
+BUSY_TIMEOUT_SECONDS = 5  # a waiting request holds a server thread, so keep it short
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 
@@ -92,6 +94,10 @@ CREATE TABLE IF NOT EXISTS interview_slots (
     CHECK (end_utc > start_utc)
 );
 
+-- The same employer cannot publish the identical slot (job + start + end) twice.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_interview_slots_identical
+    ON interview_slots (employer_id, job_id, start_utc, end_utc);
+
 CREATE TABLE IF NOT EXISTS bookings (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     slot_id        INTEGER NOT NULL UNIQUE REFERENCES interview_slots(id) ON DELETE RESTRICT,
@@ -107,6 +113,7 @@ def get_db() -> sqlite3.Connection:
         db = sqlite3.connect(
             current_app.config["DATABASE"],
             detect_types=sqlite3.PARSE_DECLTYPES,
+            timeout=BUSY_TIMEOUT_SECONDS,  # wait for the write lock instead of failing at once
         )
         db.row_factory = sqlite3.Row
         # Autocommit mode: transactions are opened explicitly (see transaction()).

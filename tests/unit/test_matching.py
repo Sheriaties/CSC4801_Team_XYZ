@@ -74,3 +74,13 @@ def test_fp_match_1_both_tie_breakers():
         {"candidate_id": 1, "display_name": "Straße", "score": 50},
     ]
     assert [r["candidate_id"] for r in sort_applicants_for_employer(names)] == [1, 2]
+
+
+def test_fp_match_1_normalization_edge_cases():
+    # Duplicates / case variants in the *required* list collapse before counting.
+    assert match_score(["a"], ["a", "A", " a "]) == 100
+    assert match_score(["a"], ["a", "A", "b"]) == 50
+    # CRLF and commas are separators; semicolons inside a skill are preserved.
+    assert parse_skills_text("Python\r\nSQL; Go, C++, C#") == ["python", "sql; go", "c++", "c#"]
+    # Non-string items are coerced instead of crashing.
+    assert match_score([1, None], ["1"]) == 100

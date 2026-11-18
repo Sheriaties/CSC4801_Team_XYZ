@@ -18,7 +18,9 @@ USER student
 
 # Writable SQLite location and the application port. SECRET_KEY is optional:
 # omit it to generate an ephemeral key (sessions expire on container restart).
-ENV DATABASE=/app/data/app.sqlite3 PORT=8080
+# RATE_LIMIT_ENABLED=0: behind Docker's port mapping every visitor shares the gateway IP,
+# so IP-keyed login/registration limits would lock reviewers out of each other.
+ENV DATABASE=/app/data/app.sqlite3 PORT=8080 RATE_LIMIT_ENABLED=0
 EXPOSE 8080
 
 # Initialize the schema (idempotent) on start, then serve via waitress.

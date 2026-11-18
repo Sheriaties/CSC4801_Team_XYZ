@@ -295,7 +295,7 @@ def test_fp_auth_2_salted_hash_and_password_verification(client, app, db):
         assert b"password_hash" not in page.data
 
 
-def test_fp_auth_3_authorization_and_missing_object(client, world):
+def test_fp_auth_3_authorization_and_missing_object(client, world, app):
     ids = world(include_cara=True)
 
     # Unauthenticated GET: redirect to login (documented equivalent of 401).
@@ -303,9 +303,11 @@ def test_fp_auth_3_authorization_and_missing_object(client, world):
     assert response.status_code == 302
     assert "/login" in response.headers["Location"]
 
-    # Unauthenticated non-GET: 401.
+    # Unauthenticated protected POST: 401 even without a CSRF token.
     response = client.post("/jobs/1/apply")
     assert response.status_code == 401
+    raw = app.test_client()
+    assert raw.post("/jobs/1/apply").status_code == 401
 
     # Wrong role: candidate hitting an employer route gets 403.
     client.login("alice@test.local", "Password123!")
@@ -326,6 +328,7 @@ def test_fp_auth_3_authorization_and_missing_object(client, world):
     assert response.status_code == 404
     client.logout()
     client.login("alice@test.local", "Password123!")
+    # A missing resume is 404; an existing foreign resume is 403.
     response = client.get("/candidates/99999/resume")
     assert response.status_code == 404
     response = client.get("/applications/99999")

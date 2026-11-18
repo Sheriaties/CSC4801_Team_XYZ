@@ -13,6 +13,26 @@
       <span class="muted">none listed</span>
     {% endif %}
   </p>
+  {% if explanation %}
+  <h2>Your match: {{ explanation.score }}</h2>
+  <p>{{ explanation.text }}</p>
+  <p>
+    {% for skill in explanation.matched %}<span class="pill">✓ {{ skill }}</span>{% endfor %}
+    {% for skill in explanation.missing %}<span class="pill">✗ {{ skill }}</span>{% endfor %}
+  </p>
+  {% if explanation.ai_text %}
+  <p><strong>AI explanation</strong> <span class="muted">(advisory only; the score above is computed from your skills and never changed by AI)</span><br>{{ explanation.ai_text }}</p>
+  {% elif ai_asked %}
+  <p class="muted">AI explanation unavailable right now; the explanation above is the deterministic one.</p>
+  {% endif %}
+  {% if ai_available %}
+  <form class="inline" method="post" action="{{ url_for('jobs.explain', job_id=job.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn secondary small" type="submit">Explain with AI</button>
+    <span class="muted">Sends only your normalized skill list and this job's required skills to an external LLM.</span>
+  </form>
+  {% endif %}
+  {% endif %}
   <div class="actions">
     {% if current_user and current_user['role'] == 'Candidate' %}
       {% if applied %}

@@ -1,8 +1,8 @@
 """Registration, login, and logout routes (FP-AUTH-1)."""
 
-from flask import Blueprint, flash, g, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, flash, g, redirect, render_template, request, session, url_for
 
-from app.errors import AppError
+from app.errors import AppError, RateLimitError
 from app.routes.helpers import clear_session, current_user, login_required
 from app.services import auth as auth_service
 
@@ -29,11 +29,26 @@ def home():
     return redirect(url_for("candidate.dashboard"))
 
 
+def _limiter():
+    return current_app.extensions["rate_limiter"] if current_app.config["RATE_LIMIT_ENABLED"] else None
+
+
+def _check(limiter, key, limit, window):
+    wait = limiter.blocked(key, limit, window)
+    if wait:
+        raise RateLimitError("Too many attempts, please try again later", retry_after=wait)
+
+
 @bp.route("/register", methods=("GET", "POST"))
 def register():
     if current_user() is not None:
         return redirect(url_for("auth.home"))
     if request.method == "POST":
+        limiter = _limiter()
+        if limiter is not None:
+            key = ("register", request.remote_addr)
+            _check(limiter, key, current_app.config["REGISTER_LIMIT"], current_app.config["REGISTER_WINDOW_SECONDS"])
+            limiter.hit(key, current_app.config["REGISTER_WINDOW_SECONDS"])
         role = request.form.get("role", "")
         try:
             user_id = auth_service.register_user(
@@ -56,10 +71,22 @@ def register():
 @bp.route("/login", methods=("GET", "POST"))
 def login():
     if request.method == "POST":
-        user = auth_service.authenticate(request.form.get("email", ""), request.form.get("password", ""))
+        email = request.form.get("email", "").strip().lower()
+        limiter = _limiter()
+        window = current_app.config["LOGIN_WINDOW_SECONDS"]
+        pair_key, ip_key = ("login", request.remote_addr, email), ("login-ip", request.remote_addr)
+        if limiter is not None:
+            _check(limiter, pair_key, current_app.config["LOGIN_FAILURE_LIMIT"], window)
+            _check(limiter, ip_key, current_app.config["LOGIN_IP_FAILURE_LIMIT"], window)
+        user = auth_service.authenticate(email, request.form.get("password", ""))
         if user is None:
+            if limiter is not None:
+                limiter.hit(pair_key, window)
+                limiter.hit(ip_key, window)
             # 401: unknown email and wrong password are indistinguishable.
             return render_template("auth/login.html", error="Invalid email or password"), 401
+        if limiter is not None:
+            limiter.reset(pair_key)
         _start_session(user["id"])
         flash("Logged in.", "success")
         if user["role"] == "Employer":

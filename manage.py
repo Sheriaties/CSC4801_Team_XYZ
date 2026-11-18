@@ -59,9 +59,10 @@ def run_command(host, port):
     from app import create_app
 
     app = create_app()
+
     port = port or app.config["PORT"]
     click.echo(f"Serving on http://{host}:{port} (database: {app.config['DATABASE']})")
-    serve(app, host=host, port=port)
+    serve(app, host=host, port=port, threads=16)
 
 
 if __name__ == "__main__":

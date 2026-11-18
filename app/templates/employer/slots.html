@@ -37,7 +37,7 @@
         <td>{{ row.start_utc | utc_display }}</td>
         <td>{{ row.end_utc | utc_display }}</td>
         <td>
-          {% if row.booking_id %}
+          {% if row.state == 'booked' %}
             <span class="pill">booked (application #{{ row.application_id }})</span>
           {% elif row.available %}
             <span class="muted">available</span>

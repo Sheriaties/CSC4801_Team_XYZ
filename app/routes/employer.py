@@ -131,10 +131,14 @@ def create_slot():
     try:
         if job_id is None:
             raise ValidationError("Select a job for this slot")
-        # The form collects a start time only; the end is always start + 30 minutes.
-        start = parse_iso(start_raw)
-        end_iso = plus_minutes(to_iso(start), 30)
-        scheduling_service.create_slot(current_user_id(), job_id, to_iso(start), end_iso)
+        # The form collects a start time only (end = start + 30 min). A client may
+        # also send an explicit end_utc; the service then validates the duration.
+        end_raw = request.form.get("end_utc", "").strip()
+        if not end_raw:
+            end_raw = plus_minutes(to_iso(parse_iso(start_raw)), 30)
+        # Raw strings go to the service, which owns all time validation (exact
+        # 30 minutes, no sub-second drift, future start).
+        scheduling_service.create_slot(current_user_id(), job_id, start_raw, end_raw)
     except (ValidationError, ValueError, OverflowError) as exc:
         message = exc.message if isinstance(exc, ValidationError) else "Times must be ISO-8601 UTC, e.g. 2026-05-01T15:00:00Z"
         rows = scheduling_service.list_slots_for_employer(current_user_id())

@@ -61,6 +61,8 @@ def app(tmp_path):
             "TESTING": True,
             "SECRET_KEY": "unit-test-secret-key",
             "DATABASE": str(database),
+            "LLM_API_KEY": None,  # tests never reach a real LLM (FP-SEC-4)
+            "LLM_CLIENT": None,
         }
     )
     with app.app_context():

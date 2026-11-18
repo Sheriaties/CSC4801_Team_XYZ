@@ -42,6 +42,11 @@ placeholders only.
 | `SECRET_KEY` | generated at startup | Flask session signing key. Without it, sessions expire on every restart. |
 | `DATABASE` | `data/app.sqlite3` (in Docker: `/app/data/app.sqlite3`) | Path to the SQLite database file (parent directory is created automatically). |
 | `PORT` | `8080` | HTTP port for `python manage.py run` / `python run.py`. |
+| `SESSION_COOKIE_SECURE` | auto | `1`/`0` forces the session cookie `Secure` flag on/off. Default: `Secure` exactly when the request is HTTPS, so plain-HTTP local demos work. Set `1` behind an HTTPS proxy that terminates TLS. |
+| `RATE_LIMIT_ENABLED` | `1` (Docker image: `0`) | `0` disables the IP-keyed login/registration limits. The image disables them because Docker's port mapping makes all visitors share one IP. |
+| `TRUSTED_PROXY_COUNT` | `0` | Number of reverse proxies in front of the app; when > 0 the client IP (and HTTPS) are taken from `X-Forwarded-For/Proto`. |
+| `ANTHROPIC_API_KEY` | unset | Optional. Enables the "Explain with AI" button (FP-MATCH-2). Not needed for anything else; never required for tests. |
+| `LLM_MODEL` | `claude-haiku-4-5-20251001` | Optional model id used with the key above. |
 
 ## Database Setup and Migrations
 

@@ -102,10 +102,10 @@ See [`REVIEW.md`](REVIEW.md) for findings and requirement-based corrections.
 
 ## Requirement–Test Mapping
 
-Every requirement ID from `CSC4801_final_project/REQUIREMENTS.md` is listed.
+Every requirement ID from `final_project/REQUIREMENTS.md` is listed.
 Functional requirements map to named student-written unit tests in
 `tests/unit/`; non-functional/process requirements cite verification evidence.
-`FP-MATCH-2` is an unimplemented optional enhancement (`N/A`).
+Optional `FP-MATCH-2` is implemented.
 
 | Requirement ID | Behavior to verify | Implementation file(s) | Unit test(s) / verification evidence |
 |---|---|---|---|
@@ -119,14 +119,14 @@ Functional requirements map to named student-written unit tests in
 | FP-EMP-1 | Company profile view/edit (name + description) | `app/services/profiles.py`, `app/routes/employer.py` | `tests/unit/test_workflows.py::test_fp_emp_1_company_profile` |
 | FP-EMP-2 | Job CRUD with title/description/skills; 403 foreign postings on **GET and POST of edit**; delete blocked by applications/slots with 409; RESTRICT FK backstop | `app/services/jobs.py`, `app/routes/employer.py` | `tests/unit/test_workflows.py::test_fp_emp_2_job_validation_and_deletion`, `tests/unit/test_workflows.py::test_invalid_job_form_retains_draft` |
 | FP-EMP-3 | Applicants sorted by score with identity/skills/score/status/booking; owner sets the four statuses only; owning employer can open application detail | `app/services/applications.py`, `app/matching.py` | `tests/unit/test_workflows.py::test_fp_emp_3_applicant_fields_order_status_and_role`; `tests/unit/test_workflows.py::test_fp_emp_3_status_redirect_uses_stored_job`, `tests/unit/test_workflows.py::test_applicants_with_same_name_have_distinct_visible_ids` |
-| FP-MATCH-1 | Deterministic skill-overlap score, normalization, four examples, both tie-breakers | `app/matching.py` | `tests/unit/test_matching.py::test_fp_match_1_examples_normalization_and_floor`; `tests/unit/test_matching.py::test_fp_match_1_both_tie_breakers` |
-| FP-MATCH-2 | Optional AI enhancement | N/A | N/A — not implemented (see Known Limitations) |
+| FP-MATCH-1 | Deterministic skill-overlap score, normalization, four examples, both tie-breakers | `app/matching.py` | `tests/unit/test_matching.py::test_fp_match_1_examples_normalization_and_floor`; `tests/unit/test_matching.py::test_fp_match_1_both_tie_breakers`; `tests/unit/test_matching.py::test_fp_match_1_normalization_edge_cases`; `tests/unit/test_strict_matching.py` (exhaustive oracle, ordering, and view agreement) |
+| FP-MATCH-2 | Optional advisory AI explanation; deterministic fallback and safe output | `app/ai.py`, `app/routes/jobs.py` | `tests/unit/test_optional.py::test_fp_match_2_explanation_is_advisory_and_safe` |
 | FP-SCHED-1 | Future 30-minute UTC slots; create/delete; reject invalid durations and past slots; booked slots undeletable and never available; expired slots labeled correctly | `app/services/scheduling.py`, `app/timeutils.py`, `app/templates/employer/slots.html` | `tests/unit/test_scheduling.py::test_fp_sched_1_slot_creation_timezones_and_deletion`; `tests/unit/test_scheduling.py::test_fp_sched_1_invalid_slots`; `tests/unit/test_scheduling.py::test_fp_sched_1_employer_availability_after_start`; `tests/unit/test_scheduling.py::test_fp_sched_1_datetime_overflow_is_validation_error` |
 | FP-SCHED-2 | Booking eligibility (owner, employer match, `Interviewing`, future & free slot, no prior booking); booking survives status change | `app/services/scheduling.py` | `tests/unit/test_scheduling.py::test_fp_sched_2_eligible_booking`; `tests/unit/test_scheduling.py::test_fp_sched_2_ineligible_booking`; `tests/unit/test_scheduling.py::test_fp_sched_2_booking_survives_status_change`; `tests/unit/test_scheduling.py::test_fp_sched_2_shared_employer_availability` |
-| FP-SCHED-3 | Atomic booking; race loser gets 409 `Slot already booked`; exactly one booking remains | `app/services/scheduling.py`, `app/db.py` (`BEGIN IMMEDIATE` + `UNIQUE`) | `tests/unit/test_scheduling.py::test_fp_sched_3_conflict_contract`; `tests/unit/test_scheduling.py::test_fp_sched_3_http_conflict_status_and_message` |
-| FP-SEC-1 | Object-ID changes do not bypass authorization (resume/application, foreign job edit GET+POST/applicants, booking with foreign application) | ownership checks in `app/services/profiles.py`, `app/services/jobs.py` (`get_owned_job`), `app/services/applications.py`, `app/services/scheduling.py` | `tests/unit/test_security.py::test_fp_sec_1_candidate_cannot_access_other_resume_or_application`; `tests/unit/test_security.py::test_fp_sec_1_employer_cannot_modify_others_job_or_read_applicants`; `tests/unit/test_security.py::test_fp_sec_1_candidate_cannot_book_with_others_application` |
-| FP-SEC-2 | Parameterized SQL; metacharacters stay bound values | `app/db.py` and all service queries (`?` placeholders) | `tests/unit/test_security.py::test_fp_sec_2_sql_metacharacters_stay_bound` |
-| FP-SEC-3 | User text escaped in HTML; `<script>` never executable | Jinja2 autoescape (`app/templates/`), `app/security.py::escape_html` | `tests/unit/test_security.py::test_fp_sec_3_script_tag_is_escaped` |
+| FP-SCHED-3 | Atomic booking; race loser gets 409 `Slot already booked`; exactly one booking remains | `app/services/scheduling.py`, `app/db.py` (`BEGIN IMMEDIATE` + `UNIQUE`) | `tests/unit/test_scheduling.py::test_fp_sched_3_conflict_contract`; `tests/unit/test_scheduling.py::test_fp_sched_3_http_conflict_status_and_message`; `tests/unit/test_scheduling.py::test_fp_sched_3_real_concurrent_bookings_one_winner`; `tests/unit/test_strict_scheduling.py` (concurrent races and atomic failures) |
+| FP-SEC-1 | Object-ID changes do not bypass authorization (resume/application, foreign job edit GET+POST/applicants, booking with foreign application) | ownership checks in `app/services/profiles.py`, `app/services/jobs.py` (`get_owned_job`), `app/services/applications.py`, `app/services/scheduling.py` | `tests/unit/test_security.py::test_fp_sec_1_candidate_cannot_access_other_resume_or_application`; `tests/unit/test_security.py::test_fp_sec_1_employer_cannot_modify_others_job_or_read_applicants`; `tests/unit/test_security.py::test_fp_sec_1_candidate_cannot_book_with_others_application`; `tests/unit/test_strict_security.py::test_strict_get_authorization_matrix`, `::test_strict_post_authorization_matrix_and_no_side_effects` |
+| FP-SEC-2 | Parameterized SQL; metacharacters stay bound values | `app/db.py` and all service queries (`?` placeholders) | `tests/unit/test_security.py::test_fp_sec_2_sql_metacharacters_stay_bound`; `tests/unit/test_strict_security.py::test_strict_sql_metacharacters_everywhere`, `::test_strict_static_all_sql_is_constant_text` |
+| FP-SEC-3 | User text escaped in HTML; `<script>` never executable | Jinja2 autoescape (`app/templates/`), `app/security.py::escape_html` | `tests/unit/test_security.py::test_fp_sec_3_script_tag_is_escaped`; `tests/unit/test_strict_security.py::test_strict_xss_every_user_controlled_field`, `::test_strict_templates_never_disable_escaping` |
 | FP-SEC-4 | No real secrets/personal data; isolated test doubles; placeholder `.env.example` | `tests/conftest.py` (per-test SQLite file), `.env.example` | `tests/unit/test_security.py::test_fp_sec_4_test_isolation_and_no_secrets`; evidence: repository contains only `demo.local` demo data |
 | FP-PROC-1 | Living specification matching the graded commit | `SPEC.md` | Evidence: `SPEC.md` sections map 1:1 to this implementation (architecture, data model, authz, routes, UI, matching, booking transaction, security) |
 | FP-DOC-1 | Installation from clean checkout incl. Docker | `INSTALL.md`, `Dockerfile` | Evidence: `INSTALL.md` lists versions, install/migrate/seed/run/test + `docker build`/`docker run` commands and troubleshooting |
@@ -152,8 +152,9 @@ Functional requirements map to named student-written unit tests in
 
 ## Known Limitations
 
-- **FP-MATCH-2 (optional AI enhancement) is not implemented** — marked `N/A`.
-  The core system therefore needs no LLM credentials and no fake-LLM fallback.
+- **FP-MATCH-2 (optional AI explanation)** is advisory, off unless
+  `ANTHROPIC_API_KEY` is set, and falls back to a deterministic explanation; the
+  core system and tests need no credentials. Data flow: see `SPEC.md`.
 - SQLite is the persistent relational database: ideal for local grading and the
   single-container environment; a multi-writer production deployment would move
   to PostgreSQL (the booking transaction pattern transfers directly).
@@ -161,6 +162,9 @@ Functional requirements map to named student-written unit tests in
   implemented). Resume text is never an input to matching, per FP-MATCH-1.
 - All times are **UTC** (ISO-8601 `Z` storage, `YYYY-MM-DD HH:MM UTC` display).
   A production UI would localize display to the viewer's timezone.
+- The login/registration rate limiter is process-local (fine for the single
+  container; use a shared store if several workers are run). Behind a TLS
+  proxy set `SESSION_COOKIE_SECURE=1`.
 - Without `SECRET_KEY` set, session keys are generated at process start and
   sessions expire on restart (see `INSTALL.md`).
 - Job deletion is a hard delete permitted only when the job has no applications

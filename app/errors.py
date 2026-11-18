@@ -47,3 +47,13 @@ class ConflictError(AppError):
     """Conflicting state: duplicate application, booked slot, race loser (HTTP 409)."""
 
     status = 409
+
+
+class RateLimitError(AppError):
+    """Too many attempts from one client (HTTP 429, with Retry-After)."""
+
+    status = 429
+
+    def __init__(self, message: str, retry_after: int = 60):
+        super().__init__(message)
+        self.retry_after = retry_after

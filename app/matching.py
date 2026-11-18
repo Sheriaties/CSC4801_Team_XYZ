@@ -20,7 +20,7 @@ def normalize_skills(raw: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     skills: list[str] = []
     for item in raw:
-        skill = (item or "").strip().lower()
+        skill = str(item if item is not None else "").strip().lower()
         if skill and skill not in seen:
             seen.add(skill)
             skills.append(skill)
@@ -31,10 +31,7 @@ def parse_skills_text(text: str) -> list[str]:
     """Parse a comma/newline separated skills field into normalized skills."""
     if not text:
         return []
-    parts: list[str] = []
-    for line in text.replace("\n", ",").split(","):
-        parts.append(line)
-    return normalize_skills(parts)
+    return normalize_skills(text.replace("\n", ",").split(","))
 
 
 def match_score(candidate_skills: Iterable[str], required_skills: Iterable[str]) -> int:
